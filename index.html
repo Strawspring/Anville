@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mysterious Town Handyman</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Expose Firebase objects globally for the game logic script
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged,
+            getFirestore,
+            doc,
+            setDoc,
+            getDoc,
+            onSnapshot,
+            collection,
+            query,
+            setLogLevel
+        };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            overflow: hidden; /* Prevent 3D canvas scroll */
+            background-color: #1f2937; /* Dark background */
+        }
+        #game-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        .ui-panel {
+            backdrop-filter: blur(8px);
+            background-color: rgba(31, 41, 55, 0.7); /* Darker panel */
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.2);
+        }
+        .resource-item {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 8px;
+            transition: background-color 0.2s;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-canvas"></div>
+
+    <!-- UI Elements -->
+    <div id="ui-container" class="fixed inset-0 pointer-events-none">
+        <!-- Message Box -->
+        <div id="message-box" class="fixed top-4 left-1/2 -translate-x-1/2 max-w-lg w-full p-4 rounded-xl ui-panel text-white text-center transition-all duration-300 opacity-0 pointer-events-none">
+            <p id="message-text" class="font-semibold"></p>
+        </div>
+
+        <!-- Start Game Modal (Initial State) -->
+        <div id="start-modal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-80 z-50">
+            <div class="bg-gray-800 p-8 md:p-10 rounded-xl shadow-2xl w-full max-w-4xl text-white text-center">
+                <h1 class="text-4xl font-bold mb-4 text-yellow-400">Welcome to Lumina Creek!</h1>
+                <p class="mb-6 text-gray-300 text-lg">You've accepted the job as the Town Handyman. The Mayor awaits, but first, choose your starting plot. Your choice will determine your initial focus and the resources immediately available to you.</p>
+
+                <div id="area-options" class="grid md:grid-cols-3 gap-6 mt-8">
+                    <!-- Option 1: Farming - Added data-area attribute, removed onclick -->
+                    <div data-area="Farming" class="p-6 rounded-xl cursor-pointer transition-all duration-300 hover:scale-[1.03] hover:shadow-lg bg-green-700/50 border border-green-500/80">
+                        <h3 class="text-2xl font-bold mb-2">Option 1: The Meadow Lot 🥕</h3>
+                        <p class="text-gray-200">Focus on **Farming**. Features a larger, fertile plot for growing high-yield crops and vegetables early on. Best for economic starters.</p>
+                        <p class="text-sm mt-3 text-yellow-300">Start Bonus: More Farmable Land & Better Initial Seeds.</p>
+                    </div>
+
+                    <!-- Option 2: Foraging - Added data-area attribute, removed onclick -->
+                    <div data-area="Foraging" class="p-6 rounded-xl cursor-pointer transition-all duration-300 hover:scale-[1.03] hover:shadow-lg bg-blue-700/50 border border-blue-500/80">
+                        <h3 class="text-2xl font-bold mb-2">Option 2: The Lakeside Grove 🍇</h3>
+                        <p class="text-gray-200">Focus on **Foraging**. Your property borders a dense woodland, providing earlier access to rare wild materials for crafting and quest completion.</p>
+                        <p class="text-sm mt-3 text-yellow-300">Start Bonus: Denser Foragable Nodes & Unique Herbs.</p>
+                    </div>
+
+                    <!-- Option 3: Mining/Forestry - Added data-area attribute, removed onclick -->
+                    <div data-area="Mining/Forestry" class="p-6 rounded-xl cursor-pointer transition-all duration-300 hover:scale-[1.03] hover:shadow-lg bg-amber-700/50 border border-amber-500/80">
+                        <h3 class="text-2xl font-bold mb-2">Option 3: The Foothill Cabin ⛏️</h3>
+                        <p class="text-gray-200">Focus on **Mining & Forestry**. Quick access to rocky outcrops and deep woods for woodcutting and stone/ore extraction. Essential for early building projects.</p>
+                        <p class="text-sm mt-3 text-yellow-300">Start Bonus: Close proximity to Rock and Tree Resources.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- HUD (Top-Right) -->
+        <div class="fixed top-4 right-4 p-4 rounded-xl ui-panel text-white pointer-events-auto">
+            <div class="flex items-center space-x-4">
+                <span class="text-sm text-gray-400">User:</span>
+                <span id="user-id-display" class="text-xs font-mono bg-gray-700 px-2 py-1 rounded">Loading...</span>
+            </div>
+            <h2 class="text-xl font-bold text-yellow-400 mt-2 mb-3">Resources</h2>
+            <div id="resource-display" class="space-y-2 text-sm">
+                <!-- Resources will be dynamically populated here -->
+                <div class="resource-item"><span class="w-10 font-bold">Wood:</span><span id="res-wood">0</span></div>
+                <div class="resource-item"><span class="w-10 font-bold">Stone:</span><span id="res-stone">0</span></div>
+                <div class="resource-item"><span class="w-10 font-bold">Gold:</span><span id="res-gold">0</span></div>
+                <div class="resource-item text-red-400"><span class="w-10 font-bold">HP:</span><span id="res-hp">100</span></div>
+                <div class="resource-item text-blue-400"><span class="w-10 font-bold">Stam:</span><span id="res-stamina">100</span></div>
+            </div>
+        </div>
+
+        <!-- Inventory (Bottom-Center) -->
+        <div class="fixed bottom-4 left-1/2 -translate-x-1/2 p-3 rounded-xl ui-panel text-white pointer-events-auto w-full max-w-xl">
+            <div class="flex justify-center space-x-2">
+                <div class="text-sm font-semibold p-2 rounded-lg bg-gray-700/50">W/A/S/D: Move</div>
+                <div class="text-sm font-semibold p-2 rounded-lg bg-gray-700/50">E: Interact (Gather)</div>
+                <div class="text-sm font-semibold p-2 rounded-lg bg-gray-700/50">Space: Jump (WIP)</div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Firebase Global Variables
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId = null;
+        let isAuthReady = false;
+
+        // Three.js Variables
+        let scene, camera, renderer, playerMesh, controls;
+        let gameInitialized = false;
+        const clock = new THREE.Clock();
+
+        // Game State
+        const gameState = {
+            resources: { wood: 0, stone: 0, gold: 0, hp: 100, stamina: 100 },
+            position: { x: 0, y: 1, z: 0 },
+            startArea: null,
+            inventory: [],
+        };
+
+        const START_CONFIGS = {
+            'Farming': { color: 0x22c55e, count: { farm: 10, tree: 3, rock: 2, forage: 1 } },
+            'Foraging': { color: 0x3b82f6, count: { farm: 3, tree: 5, rock: 3, forage: 8 } },
+            'Mining/Forestry': { color: 0xfb923c, count: { farm: 2, tree: 8, rock: 6, forage: 2 } },
+        };
+
+        const KEY_STATE = {};
+        const PLAYER_SPEED = 0.1;
+        const SAVE_PATH = `artifacts/${appId}/users/`;
+        const SAVE_DOC = 'game_state/current_state';
+        
+        // --- UTILITY FUNCTIONS ---
+
+        function showMessage(text, duration = 3000) {
+            const messageBox = document.getElementById('message-box');
+            document.getElementById('message-text').textContent = text;
+            
+            // Show message
+            messageBox.classList.remove('opacity-0', 'pointer-events-none');
+            messageBox.classList.add('opacity-100', 'pointer-events-auto');
+
+            // Hide message after duration
+            clearTimeout(window.messageTimeout);
+            window.messageTimeout = setTimeout(() => {
+                messageBox.classList.remove('opacity-100', 'pointer-events-auto');
+                messageBox.classList.add('opacity-0', 'pointer-events-none');
+            }, duration);
+        }
+
+        function updateResourceDisplay() {
+            if (!gameState.startArea) return; // Wait for selection
+
+            document.getElementById('res-wood').textContent = gameState.resources.wood;
+            document.getElementById('res-stone').textContent = gameState.resources.stone;
+            document.getElementById('res-gold').textContent = gameState.resources.gold;
+            document.getElementById('res-hp').textContent = gameState.resources.hp;
+            document.getElementById('res-stamina').textContent = gameState.resources.stamina.toFixed(0); // Display stamina as integer for cleaner look
+
+            saveGameState(); // Save on resource update
+        }
+
+        // --- FIREBASE FUNCTIONS ---
+
+        async function initializeFirebase() {
+            try {
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase config is missing or invalid.");
+                    return;
+                }
+                
+                // Set Firestore log level for debugging
+                window.firebase.setLogLevel('debug');
+                
+                const app = window.firebase.initializeApp(firebaseConfig);
+                db = window.firebase.getFirestore(app);
+                auth = window.firebase.getAuth(app);
+                
+                // Correctly referencing the exposed onAuthStateChanged function
+                window.firebase.onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = userId;
+                        isAuthReady = true;
+                        console.log("Authenticated with user ID:", userId);
+                        await loadGameState();
+                    } else {
+                        // Attempt sign-in if not already authenticated
+                        if (!userId) {
+                             if (initialAuthToken) {
+                                await window.firebase.signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await window.firebase.signInAnonymously(auth);
+                            }
+                        }
+                    }
+                });
+
+                // Force sign-in if not yet triggered (needed for initial load)
+                if (!auth.currentUser) {
+                    if (initialAuthToken) {
+                        await window.firebase.signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await window.firebase.signInAnonymously(auth);
+                    }
+                }
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+            }
+        }
+
+        async function saveGameState() {
+            if (!isAuthReady || !userId || !gameState.startArea) return;
+            
+            // FIX: Only update player position if the 3D mesh exists (i.e., game is initialized)
+            if (playerMesh) {
+                gameState.position.x = playerMesh.position.x;
+                gameState.position.y = playerMesh.position.y;
+                gameState.position.z = playerMesh.position.z;
+            }
+
+            try {
+                const docRef = window.firebase.doc(db, `${SAVE_PATH}${userId}/${SAVE_DOC}`);
+                // Use merge: true to avoid overwriting the entire document if playerMesh was undefined
+                await window.firebase.setDoc(docRef, gameState, { merge: true });
+                console.log("Game state saved.");
+            } catch (e) {
+                console.error("Error saving document: ", e);
+            }
+        }
+
+        async function loadGameState() {
+            if (!isAuthReady || !userId) return;
+
+            try {
+                const docRef = window.firebase.doc(db, `${SAVE_PATH}${userId}/${SAVE_DOC}`);
+                const docSnap = await window.firebase.getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    const loadedState = docSnap.data();
+                    Object.assign(gameState, loadedState);
+                    
+                    // Check if startArea was previously selected
+                    if (gameState.startArea) {
+                        document.getElementById('start-modal').classList.add('hidden');
+                        showMessage(`Welcome back! Starting area: ${gameState.startArea}`);
+                        
+                        // Start the game with loaded state
+                        initGame();
+                        
+                        // Set player position
+                        playerMesh.position.set(gameState.position.x, gameState.position.y, gameState.position.z);
+                        updateResourceDisplay();
+                    }
+                    console.log("Game state loaded:", gameState);
+                } else {
+                    console.log("No saved game state found. Showing start modal.");
+                }
+            } catch (e) {
+                console.error("Error loading document:", e);
+            }
+        }
+        
+        // New function to handle area selection logic
+        async function handleAreaSelection(area) {
+            gameState.startArea = area;
+            document.getElementById('start-modal').classList.add('hidden');
+            
+            showMessage(`You chose the ${area} lot! Your adventure begins now. (Press E to Interact)`);
+            
+            // Initialize the 3D world FIRST to create playerMesh
+            initGame();
+            
+            // Then update resources, which will trigger a safe save of the initial state (0, 1, 0)
+            updateResourceDisplay();
+        };
+
+
+        // --- THREE.JS GAME FUNCTIONS ---
+
+        function setupScene() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb); // Light Blue Sky
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 15);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer
+            const canvasContainer = document.getElementById('game-canvas');
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            canvasContainer.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 5); // soft white light
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
+            directionalLight.position.set(50, 100, 50);
+            directionalLight.target.position.set(0, 0, 0);
+            scene.add(directionalLight);
+            scene.add(directionalLight.target);
+
+            // Ground Plane
+            const planeGeometry = new THREE.PlaneGeometry(100, 100);
+            const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x8fbc8f });
+            const ground = new THREE.Mesh(planeGeometry, planeMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = 0;
+            scene.add(ground);
+
+            // Player Mesh (Simple Cube)
+            const playerGeometry = new THREE.BoxGeometry(0.5, 1.8, 0.5);
+            const playerMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            playerMesh = new THREE.Mesh(playerGeometry, playerMaterial);
+            playerMesh.position.y = 1;
+            scene.add(playerMesh);
+        }
+
+        function createResource(type, color, size, x, z) {
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshLambertMaterial({ color });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, size / 2, z);
+            mesh.userData = { type: 'resource', resourceType: type, quantity: 1, initialPos: { x, z } };
+            scene.add(mesh);
+        }
+
+        function populateWorld(areaConfig) {
+            const { count } = areaConfig;
+
+            const resourceTypes = [
+                { type: 'wood', color: 0x8b4513, size: 1.5, count: count.tree },
+                { type: 'stone', color: 0xa9a9a9, size: 1, count: count.rock },
+                { type: 'farm', color: 0x556b2f, size: 0.8, count: count.farm }, // Farm Plot
+                { type: 'forage', color: 0xdda0dd, size: 0.5, count: count.forage } // Foragable
+            ];
+
+            const spawnRadius = 20;
+
+            resourceTypes.forEach(res => {
+                for (let i = 0; i < res.count; i++) {
+                    // Spawn resources in the forward quadrant (the "starting area")
+                    const x = (Math.random() * spawnRadius * 2) - spawnRadius;
+                    const z = (Math.random() * spawnRadius); // Focus on positive Z axis
+                    createResource(res.type, res.color, res.size, x, z);
+                }
+            });
+
+            // Add the Mayor's Office (Simple Town Hub)
+            const mayorGeometry = new THREE.BoxGeometry(8, 6, 8);
+            const mayorMaterial = new THREE.MeshLambertMaterial({ color: 0xffd700 });
+            const mayorMesh = new THREE.Mesh(mayorGeometry, mayorMaterial);
+            mayorMesh.position.set(0, 3, -15);
+            mayorMesh.userData = { type: 'town', name: "Mayor's Office" };
+            scene.add(mayorMesh);
+        }
+        
+        function initGame() {
+            if (gameInitialized) return; // Prevent re-initialization
+            
+            console.log("Game initialized. Starting 3D scene and animation loop."); // Added debug log
+
+            setupScene();
+            populateWorld(START_CONFIGS[gameState.startArea]);
+            
+            // Lock camera to player position (simple follow cam)
+            camera.position.set(playerMesh.position.x, playerMesh.position.y + 5, playerMesh.position.z + 8);
+            camera.lookAt(playerMesh.position);
+            
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            document.addEventListener('keydown', onInteract, false);
+
+            gameInitialized = true;
+            animate();
+        }
+
+
+        // --- EVENT LISTENERS ---
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) { KEY_STATE[event.key.toLowerCase()] = true; }
+        function onKeyUp(event) { KEY_STATE[event.key.toLowerCase()] = false; }
+
+        function onInteract(event) {
+            if (event.key.toLowerCase() === 'e' && gameState.stamina > 0) {
+                // Raycasting from player's center forward
+                const raycaster = new THREE.Raycaster();
+                const direction = new THREE.Vector3();
+                playerMesh.getWorldDirection(direction);
+                
+                // Adjust origin to be slightly in front of the player
+                const origin = playerMesh.position.clone().add(direction.multiplyScalar(0.5)); 
+                
+                raycaster.set(origin, direction);
+                
+                const intersects = raycaster.intersectObjects(scene.children, true);
+                
+                for (let i = 0; i < intersects.length; i++) {
+                    const intersected = intersects[i].object;
+                    
+                    if (intersected.userData.type === 'resource' && intersects[i].distance < 3) { // Must be close
+                        const { resourceType, quantity } = intersected.userData;
+                        
+                        // Check stamina cost (simplified: 5 stamina per action)
+                        if (gameState.resources.stamina < 5) {
+                            showMessage("You are too tired! Rest (or wait) to recover stamina.", 3000);
+                            return;
+                        }
+
+                        gameState.resources.stamina = Math.max(0, gameState.resources.stamina - 5);
+                        gameState.resources[resourceType] += quantity;
+                        
+                        showMessage(`+${quantity} ${resourceType.charAt(0).toUpperCase() + resourceType.slice(1)}!`, 1500);
+
+                        // Remove the resource node from the scene and update display
+                        scene.remove(intersected);
+                        updateResourceDisplay();
+                        
+                        // Stop after first successful interaction
+                        return;
+                    } else if (intersected.userData.type === 'town' && intersects[i].distance < 4) {
+                        showMessage(`You are standing by the ${intersected.userData.name}. The Mayor needs your help to improve Lumina Creek! (WIP Quest System)`, 4000);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // --- GAME LOOP ---
+
+        function handleMovement() {
+            const delta = clock.getDelta();
+            const distance = PLAYER_SPEED * delta * 60;
+            const direction = new THREE.Vector3();
+            
+            // Get the camera's forward direction to define movement relative to view
+            camera.getWorldDirection(direction);
+            direction.y = 0; // Keep movement purely horizontal
+            direction.normalize();
+
+            // Calculate right direction
+            const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), direction);
+            
+            let moved = false;
+            
+            if (KEY_STATE['w']) {
+                playerMesh.position.add(direction.multiplyScalar(distance));
+                moved = true;
+            }
+            if (KEY_STATE['s']) {
+                playerMesh.position.add(direction.multiplyScalar(-distance));
+                moved = true;
+            }
+            if (KEY_STATE['a']) {
+                playerMesh.position.add(right.multiplyScalar(distance));
+                moved = true;
+            }
+            if (KEY_STATE['d']) {
+                playerMesh.position.add(right.multiplyScalar(-distance));
+                moved = true;
+            }
+
+            // Simple boundary check (for 100x100 ground)
+            playerMesh.position.x = Math.max(-48, Math.min(48, playerMesh.position.x));
+            playerMesh.position.z = Math.max(-48, Math.min(48, playerMesh.position.z));
+            playerMesh.position.y = 1; // Keep player on the ground
+
+            // Update camera position to follow the player smoothly
+            const targetPosition = playerMesh.position.clone();
+            const cameraOffset = new THREE.Vector3(0, 5, 8); // Height and distance offset
+            
+            // Apply rotation to offset to make it relative to player's facing (simple chase cam)
+            
+            camera.position.lerp(targetPosition.clone().add(cameraOffset), 0.1);
+            camera.lookAt(targetPosition.clone().add(new THREE.Vector3(0, 1, 0)));
+            
+            if (moved) {
+                // Throttle saving the position (save only every 2 seconds if moving)
+                if (!window.saveTimer) {
+                    window.saveTimer = setTimeout(() => {
+                        saveGameState();
+                        window.saveTimer = null;
+                    }, 2000); 
+                }
+            }
+        }
+
+        function staminaRecovery() {
+            if (gameState.resources.stamina < 100) {
+                gameState.resources.stamina = Math.min(100, gameState.resources.stamina + 0.1); // Slow passive recovery
+                updateResourceDisplay();
+            }
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!gameInitialized) return;
+
+            handleMovement();
+            staminaRecovery();
+            
+            renderer.render(scene, camera);
+        }
+
+        // --- INITIALIZATION ---
+
+        window.onload = () => {
+            initializeFirebase();
+            
+            // Event listener to handle clicks on the starting area options
+            const areaOptions = document.getElementById('area-options');
+            areaOptions.addEventListener('click', (event) => {
+                console.log("Click detected on area options container."); // Added debugging log
+                let target = event.target;
+                // Traverse up to find the element with the data-area attribute
+                while (target && target !== areaOptions) {
+                    if (target.dataset.area) {
+                        console.log("Starting area selected:", target.dataset.area); // Added debugging log
+                        handleAreaSelection(target.dataset.area);
+                        break;
+                    }
+                    target = target.parentElement;
+                }
+            });
+        };
+    </script>
+</body>
+</html>
